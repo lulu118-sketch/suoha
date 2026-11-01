@@ -1,6 +1,6 @@
 # Suoha
 
-**Suoha** 是一个面向 Debian、Ubuntu 和 Alpine 的 Bash 安装/管理脚本，使用 Xray 提供 VLESS + Trojan over WebSocket，并通过 Cloudflare Tunnel 对外提供连接入口和订阅。主程序来源于GitHub仓库，后来再进行加工！
+**Suoha** 是一个面向 Debian、Ubuntu 和 Alpine 的 Bash 安装/管理脚本，使用 Xray 提供 VLESS + Trojan over WebSocket，并通过 Cloudflare Tunnel 对外提供连接入口和订阅。主程序来源于[GitHub仓库](https://github.com/jwfst5088/suoha.sh)，后来再进行加工！
 
 > 本项目仍建议先在测试 VPS 上验证，再用于正式环境。Cloudflare Tunnel、Xray、系统服务和订阅配置均会在 VPS 上创建或修改。
 
