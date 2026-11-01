@@ -1,0 +1,17 @@
+# Local/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Runtime state, credentials, generated node/subscription data
+state.env
+*.pem
+*.key
+*.json
+nodes.txt
+sub.txt
+clash.yaml
+links.txt
