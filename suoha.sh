@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Suoha 2.0 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
+# Suoha 2.1 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
 # Supported: Debian/Ubuntu (systemd), Alpine (OpenRC)
 # Subscription is served only on localhost and exposed through a random secret URL path.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 APP="suoha"
 BASE="/opt/suoha"
 BIN="$BASE/bin"
@@ -17,6 +17,8 @@ WWW="$BASE/www"
 CF_HOME="/root/.cloudflared"
 STATE="$BASE/state.env"
 MANAGER="$BASE/suoha.sh"
+XRAY_BACKUP_DIR="$BASE/backup/xray"
+XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; RESET='\033[0m'
 info(){ echo -e "${BLUE}[INFO]${RESET} $*"; }
@@ -340,6 +342,191 @@ start_xray(){
   service_enable_start "suoha-xray"
 }
 
+# Xray updater: only replaces /opt/suoha/bin/xray. Existing config, UUID,
+# ports, paths, subscriptions and Cloudflare Tunnel are deliberately untouched.
+xray_current_version(){
+  [[ -x "$BIN/xray" ]] || { echo "未安装"; return 1; }
+  "$BIN/xray" version 2>/dev/null | head -n1 | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/v\1/'
+}
+
+xray_asset_for_arch(){
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s' 'Xray-linux-64.zip' ;;
+    aarch64|arm64) printf '%s' 'Xray-linux-arm64-v8a.zip' ;;
+    armv7l|armv7) printf '%s' 'Xray-linux-arm32-v7a.zip' ;;
+    i386|i686) printf '%s' 'Xray-linux-32.zip' ;;
+    *) die "当前 CPU 架构不受 Xray 更新器支持：$(uname -m)" ;;
+  esac
+}
+
+xray_release_metadata(){
+  local json_file="$1" asset="$2"
+  python3 - "$json_file" "$asset" <<'PY_META'
+import json,sys
+obj=json.load(open(sys.argv[1],encoding='utf-8'))
+if obj.get('draft') or obj.get('prerelease'):
+    raise SystemExit('GitHub 返回的版本不是正式稳定版')
+assets={a.get('name'):a for a in obj.get('assets',[])}
+a=assets.get(sys.argv[2])
+if not a:
+    raise SystemExit('Release 缺少当前架构资产：'+sys.argv[2])
+digest=a.get('digest') or ''
+if not digest.startswith('sha256:'):
+    raise SystemExit('GitHub Release API 未提供该资产的 SHA256 digest；为安全起见停止更新')
+print(obj.get('tag_name',''))
+print(a.get('browser_download_url',''))
+print(digest.split(':',1)[1].lower())
+PY_META
+}
+
+xray_fetch_release(){
+  local tmp="$1" asset="$2" metadata
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
+    -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -H 'User-Agent: Suoha-Xray-Updater' "$XRAY_RELEASE_API" -o "$tmp/release.json"
+  metadata="$(xray_release_metadata "$tmp/release.json" "$asset")" || return 1
+  XRAY_REMOTE_TAG="$(printf '%s\n' "$metadata" | sed -n '1p')"
+  XRAY_ASSET_URL="$(printf '%s\n' "$metadata" | sed -n '2p')"
+  XRAY_EXPECTED_SHA="$(printf '%s\n' "$metadata" | sed -n '3p')"
+  [[ "$XRAY_REMOTE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Release 版本号格式异常：$XRAY_REMOTE_TAG"; return 1; }
+  [[ "$XRAY_ASSET_URL" == https://github.com/XTLS/Xray-core/releases/download/* ]] || { err "下载地址不是 XTLS 官方 Release 地址"; return 1; }
+}
+
+xray_check_update(){
+  local tmp asset current
+  tmp="$(mktemp -d)" || return 1
+  asset="$(xray_asset_for_arch)"
+  if ! xray_fetch_release "$tmp" "$asset"; then rm -rf "$tmp"; return 1; fi
+  current="$(xray_current_version || true)"
+  echo "当前 Xray：${current:-未知}"
+  echo "最新稳定版：$XRAY_REMOTE_TAG"
+  echo "架构资产：$asset"
+  if [[ "${current#v}" == "${XRAY_REMOTE_TAG#v}" ]]; then ok "Xray 已是最新稳定版"; else info "发现可用更新：${current:-未知} -> $XRAY_REMOTE_TAG"; fi
+  rm -rf "$tmp"
+}
+
+xray_service_is_active(){
+  if [[ "$INIT" == systemd ]]; then
+    systemctl is-active --quiet suoha-xray.service
+  else
+    rc-service suoha-xray status >/dev/null 2>&1
+  fi
+}
+
+xray_restart_and_verify(){
+  if [[ "$INIT" == systemd ]]; then
+    systemctl restart suoha-xray.service || return 1
+    sleep 2
+    systemctl is-active --quiet suoha-xray.service || return 1
+  else
+    rc-service suoha-xray restart || return 1
+    sleep 2
+    rc-service suoha-xray status >/dev/null 2>&1 || return 1
+  fi
+  "$BIN/xray" run -test -config "$CONF/xray.json" >/dev/null 2>&1 || return 1
+  return 0
+}
+
+xray_keep_backups(){
+  [[ -d "$XRAY_BACKUP_DIR" ]] || return 0
+  python3 - "$XRAY_BACKUP_DIR" <<'PY_CLEAN'
+import os,sys
+root=sys.argv[1]
+files=[os.path.join(root,n) for n in os.listdir(root) if n.startswith('xray-') and os.path.isfile(os.path.join(root,n))]
+files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+for path in files[5:]:
+    try: os.remove(path)
+    except OSError: pass
+PY_CLEAN
+}
+
+xray_update(){
+  local tmp asset current staged backup was_active
+  [[ -x "$BIN/xray" ]] || die "未找到当前 Xray：$BIN/xray"
+  [[ -s "$CONF/xray.json" ]] || die "未找到 Xray 配置：$CONF/xray.json"
+  "$BIN/xray" run -test -config "$CONF/xray.json" >/dev/null || die "当前配置测试失败，拒绝升级"
+  was_active=0; xray_service_is_active && was_active=1
+  [[ "$was_active" == 1 ]] || die "Xray 服务当前未运行。请先启动服务，再执行在线更新"
+
+  tmp="$(mktemp -d)" || die "无法创建临时目录"
+  asset="$(xray_asset_for_arch)"
+  info "查询 XTLS/Xray-core 最新正式稳定版..."
+  if ! xray_fetch_release "$tmp" "$asset"; then rm -rf "$tmp"; die "获取官方版本信息或 SHA256 校验信息失败"; fi
+  current="$(xray_current_version || true)"
+  echo "当前版本：${current:-未知}；目标版本：$XRAY_REMOTE_TAG"
+  if [[ "${current#v}" == "${XRAY_REMOTE_TAG#v}" ]]; then rm -rf "$tmp"; ok "当前已是最新版本，无需更新"; return 0; fi
+  read -r -p "确认将 Xray 更新到 $XRAY_REMOTE_TAG？[y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]] || { rm -rf "$tmp"; info "已取消更新"; return 0; }
+
+  info "下载官方资产：$asset"
+  curl -fL --retry 3 --connect-timeout 10 --max-time 300 "$XRAY_ASSET_URL" -o "$tmp/xray.zip" || { rm -rf "$tmp"; die "Xray 下载失败，现有版本未改变"; }
+  local actual_sha
+  actual_sha="$(sha256sum "$tmp/xray.zip" | awk '{print tolower($1)}')"
+  [[ "$actual_sha" == "$XRAY_EXPECTED_SHA" ]] || { rm -rf "$tmp"; die "SHA256 校验失败，拒绝安装下载文件"; }
+  unzip -tq "$tmp/xray.zip" >/dev/null || { rm -rf "$tmp"; die "Xray ZIP 完整性检查失败"; }
+  mkdir -p "$tmp/extract"
+  unzip -oq "$tmp/xray.zip" xray -d "$tmp/extract" || { rm -rf "$tmp"; die "无法从压缩包提取 xray"; }
+  staged="$tmp/extract/xray"
+  [[ -s "$staged" ]] || { rm -rf "$tmp"; die "下载包中没有有效 xray 文件"; }
+  chmod 0755 "$staged"
+  "$staged" version >/dev/null 2>&1 || { rm -rf "$tmp"; die "新 Xray 二进制无法执行"; }
+  "$staged" run -test -config "$CONF/xray.json" >/dev/null || { rm -rf "$tmp"; die "新 Xray 无法通过现有配置测试，拒绝替换"; }
+
+  install -d -m 0700 "$XRAY_BACKUP_DIR"
+  backup="$XRAY_BACKUP_DIR/xray-$(date +%Y%m%d-%H%M%S)-${current#v}"
+  cp -a "$BIN/xray" "$backup" || { rm -rf "$tmp"; die "备份当前 Xray 失败，拒绝更新"; }
+  chmod 0700 "$XRAY_BACKUP_DIR"; chmod 0700 "$backup"
+  info "备份完成：$backup"
+  install -m 0755 "$staged" "$BIN/xray.new" || { rm -rf "$tmp"; die "写入新二进制失败，旧版本未改变"; }
+  mv -f "$BIN/xray.new" "$BIN/xray"
+  if xray_restart_and_verify; then
+    local installed_version
+    installed_version="$(xray_current_version || true)"
+    rm -rf "$tmp"
+    xray_keep_backups
+    ok "Xray 更新成功：${current:-未知} -> ${installed_version:-$XRAY_REMOTE_TAG}"
+    info "Xray 服务已重启并通过配置/运行状态检查；节点、订阅和 Tunnel 配置未改动"
+    return 0
+  fi
+
+  err "新版本启动或健康检查失败，正在自动回滚..."
+  install -m 0755 "$backup" "$BIN/xray.rollback"
+  mv -f "$BIN/xray.rollback" "$BIN/xray"
+  if xray_restart_and_verify; then
+    rm -rf "$tmp"
+    err "更新失败，已自动恢复到 $current；原服务已恢复运行"
+    return 1
+  fi
+  rm -rf "$tmp"
+  err "自动回滚后服务仍未通过检查，请查看 suoha-xray 日志；旧二进制备份保留在：$backup"
+  return 1
+}
+
+xray_rollback(){
+  local backup current
+  [[ -d "$XRAY_BACKUP_DIR" ]] || die "没有找到 Xray 备份目录"
+  backup="$(python3 - "$XRAY_BACKUP_DIR" <<'PY_LATEST'
+import os,sys
+root=sys.argv[1]
+files=[os.path.join(root,n) for n in os.listdir(root) if n.startswith('xray-') and os.path.isfile(os.path.join(root,n))]
+files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+print(files[0] if files else '')
+PY_LATEST
+  )"
+  [[ -n "$backup" && -s "$backup" ]] || die "没有可用的 Xray 备份"
+  "$backup" version >/dev/null 2>&1 || die "备份文件无法执行，拒绝回滚"
+  "$backup" run -test -config "$CONF/xray.json" >/dev/null || die "备份版本无法通过当前配置测试，拒绝回滚"
+  xray_service_is_active || die "Xray 服务当前未运行，请先启动服务再回滚"
+  current="$(xray_current_version || true)"
+  read -r -p "确认回滚到 $("$backup" version 2>/dev/null | head -n1)？[y/N] " ans
+  [[ "$ans" =~ ^[Yy]$ ]] || { info "已取消回滚"; return 0; }
+  tmp="$BIN/xray.rollback"
+  cp -a "$BIN/xray" "$XRAY_BACKUP_DIR/xray-before-rollback-$(date +%Y%m%d-%H%M%S)" || die "无法备份当前版本"
+  install -m 0755 "$backup" "$tmp"
+  mv -f "$tmp" "$BIN/xray"
+  if xray_restart_and_verify; then ok "Xray 已从 ${current:-当前版本} 回滚至 $(xray_current_version)"; else err "回滚后健康检查失败，请检查服务日志和备份文件"; return 1; fi
+}
+
 cf_login(){
   install -d -m 0700 "$CF_HOME"
   if [[ -s "$CF_HOME/cert.pem" ]]; then
@@ -623,6 +810,10 @@ manager_menu(){
     echo "4. 停止服务"
     echo "5. 启动服务"
     echo "6. 卸载 Suoha（保留 CF 授权和远端 Tunnel）"
+    echo "7. 查看 Xray 当前版本"
+    echo "8. 检查 Xray 最新稳定版"
+    echo "9. 更新 Xray（自动备份 / 校验 / 失败回滚）"
+    echo "10. 回滚到最近一次 Xray 备份"
     echo "0. 退出"
     read -r -p "请选择：" c
     case "$c" in
@@ -632,6 +823,10 @@ manager_menu(){
       4) stop_services ;;
       5) load_state; service_enable_start suoha-xray; service_enable_start suoha-sub; if [[ "$MODE" == fixed ]]; then service_enable_start suoha-cloudflared; else service_enable_start suoha-quick; fi ;;
       6) uninstall_app; return ;;
+      7) echo "当前 Xray：$(xray_current_version || echo 未安装)" ;;
+      8) xray_check_update || warn "检查更新失败，请检查网络或 GitHub API 状态" ;;
+      9) xray_update || warn "Xray 更新未完成；如已触发自动回滚，请检查服务日志" ;;
+      10) xray_rollback || warn "Xray 回滚未完成，请检查服务日志" ;;
       0) return ;;
       *) warn "无效选项" ;;
     esac
@@ -665,6 +860,24 @@ if [[ "${1:-}" == "--quick-daemon" ]]; then
   os_detect
   INIT="${INIT:-$( [[ "$OS_FAMILY" == debian ]] && echo systemd || echo openrc )}"
   quick_daemon
+  exit $?
+fi
+
+# Safely deploy this script as the manager of an existing Suoha installation.
+# Only the manager script and command symlink are changed; state/config/data/services remain intact.
+if [[ "${1:-}" == "--upgrade-manager" ]]; then
+  require_root
+  os_detect
+  [[ -s "$STATE" ]] || die "未发现现有 Suoha 安装状态：$STATE"
+  INIT="$( [[ "$OS_FAMILY" == debian ]] && echo systemd || echo openrc )"
+  if [[ "$(readlink -f "$0" 2>/dev/null || true)" != "$(readlink -f "$MANAGER" 2>/dev/null || true)" ]]; then
+    install -d -m 0755 "$BASE"
+    install -m 0700 "$0" "$MANAGER"
+  fi
+  ln -sf "$MANAGER" /usr/local/bin/suoha
+  load_state
+  ok "Suoha 管理脚本已升级至 $VERSION；现有配置、节点、订阅及 Tunnel 均未修改"
+  manager_menu
   exit $?
 fi
 
