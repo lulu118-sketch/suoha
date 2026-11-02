@@ -25,13 +25,13 @@
 
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lulu118-sketch/suoha/blob/main/suoha.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh)
 ```
 
 也可以先下载，再运行：
 
 ```bash
-curl -fL https://raw.githubusercontent.com/lulu118-sketch/suoha/blob/main/suoha.sh -o suoha.sh && chmod 700 suoha.sh && bash suoha.sh
+curl -fL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh -o suoha.sh && bash suoha.sh
 ```
 
 ## 安装模式
