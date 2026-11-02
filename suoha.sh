@@ -80,7 +80,7 @@ install_deps(){
     update-ca-certificates >/dev/null 2>&1 || true
     deps_missing && die "运行依赖安装后仍有命令缺失，请检查系统软件源"
     install -d -m 0755 "$(dirname "$DEPS_MARKER")"
-    printf '%s\\n' "$OS_FAMILY" > "$DEPS_MARKER"
+    printf '%s\n' "$OS_FAMILY" > "$DEPS_MARKER"
     chmod 600 "$DEPS_MARKER"
   fi
 
