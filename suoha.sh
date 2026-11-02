@@ -2,6 +2,20 @@
 # Suoha 2.0 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
 # Supported: Debian/Ubuntu (systemd), Alpine (OpenRC)
 # Subscription is served only on localhost and exposed through a random secret URL path.
+# 确保脚本被调用时自动复制到 /opt/suoha/suoha.sh 并创建全局命令 suoha
+BASE="/opt/suoha"
+MANAGER="$BASE/suoha.sh"
+if [[ "${BASH_SOURCE[0]:-}" != "$MANAGER" ]] && [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+  install -d -m 0755 "$BASE"
+  install -m 700 "${BASH_SOURCE[0]}" "$MANAGER"
+  ln -sf "$MANAGER" /usr/local/bin/suoha
+  chmod +x /usr/local/bin/suoha
+elif [[ -f "$0" ]] && [[ "$0" != "$MANAGER" ]]; then
+  install -d -m 0755 "$BASE"
+  install -m 700 "$0" "$MANAGER"
+  ln -sf "$MANAGER" /usr/local/bin/suoha
+  chmod +x /usr/local/bin/suoha
+fi
 
 set -Eeuo pipefail
 IFS=$'\n\t'
