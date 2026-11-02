@@ -36,6 +36,7 @@ trap on_error ERR
 require_root(){ [[ ${EUID:-$(id -u)} -eq 0 ]] || die "请使用 root 运行：bash suoha-2.0.sh"; }
 
 os_detect(){
+  local VERSION
   [[ -r /etc/os-release ]] || die "无法识别系统：缺少 /etc/os-release"
   . /etc/os-release
   case "${ID:-}" in
