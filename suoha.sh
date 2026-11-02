@@ -288,17 +288,47 @@ def card(title, subtitle, image, value, copy_label):
             f'<a href="{html.escape(value, quote=True)}">打开链接</a>'
             f'<button type="button" data-copy="{html.escape(value, quote=True)}">复制{html.escape(copy_label)}</button></article>')
 
-parts = []
+subscription_parts = []
+node_parts = []
 standard = subbase + '/sub.txt'
 clash = subbase + '/clash.yaml'
-parts.append(card('通用订阅（VLESS / Trojan）', '支持订阅 URL 导入的客户端', make_qr('subscription-standard.svg', standard), standard, '订阅链接'))
-parts.append(card('Clash / Mihomo 订阅', '适用于 Clash Meta / Mihomo，以及支持 Mihomo 订阅的 Karing、ClashMi', make_qr('subscription-mihomo.svg', clash), clash, '订阅链接'))
+subscription_parts.append(card('通用订阅（VLESS / Trojan）', '支持订阅 URL 导入的客户端', make_qr('subscription-standard.svg', standard), standard, '订阅链接'))
+subscription_parts.append(card('Clash / Mihomo 订阅', '适用于 Clash Meta / Mihomo，以及支持 Mihomo 订阅的 Karing、ClashMi', make_qr('subscription-mihomo.svg', clash), clash, '订阅链接'))
 for idx, uri in enumerate(nodes, 1):
     scheme = urllib.parse.urlsplit(uri).scheme.upper()
     label = urllib.parse.unquote(urllib.parse.urlsplit(uri).fragment) or f'{scheme} 节点 {idx}'
-    parts.append(card(label, f'{scheme} 单节点分享码；使用客户端的扫码导入功能', make_qr(f'node-{idx:02d}.svg', uri), uri, '节点链接'))
+    node_parts.append(card(label, f'{scheme} 单节点分享码；使用客户端的扫码导入功能', make_qr(f'node-{idx:02d}.svg', uri), uri, '节点链接'))
 
-page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Suoha 节点二维码</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:#182230;font:16px/1.5 system-ui,sans-serif}.wrap{max-width:1050px;margin:auto;padding:24px 16px 48px}h1{font-size:26px}.hint,.foot{color:#637083}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}.card{background:white;border:1px solid #dce3ec;border-radius:14px;padding:16px;overflow-wrap:anywhere}.card h2{font-size:17px}.card p{font-size:13px;color:#637083;min-height:38px}.card img{display:block;width:min(100%,230px);height:auto;margin:8px auto 14px}.card a,.card button{display:inline-block;margin:4px;padding:8px 11px;border:1px solid #cbd5e1;border-radius:8px;background:white;color:#164e9a;text-decoration:none;cursor:pointer}.foot{font-size:12px;margin-top:22px}</style></head><body><main class="wrap"><h1>Suoha 节点二维码</h1><p class="hint">v2rayNG、v2rayN、Shadowrocket、NekoBox、Hiddify：优先扫描对应的 VLESS / Trojan 单节点码。Clash Meta / Mihomo：使用 Clash / Mihomo 订阅码，通过“从 URL 导入”添加。Karing、ClashMi：优先使用订阅码；也可尝试扫描单节点码，具体取决于客户端版本及扫码入口。</p><section class="grid">''' + ''.join(parts) + '''</section><p class="foot">Suoha ''' + html.escape(version) + ''' · 含私密节点凭据，请勿公开转发。</p></main><script>document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='已复制'}catch(e){b.textContent='请长按链接复制'}}));</script></body></html>'''
+page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Suoha 节点二维码</title><style>
+*{box-sizing:border-box}
+body{margin:0;background:#f4f6fa;color:#182230;font:16px/1.5 system-ui,sans-serif}
+.wrap{max-width:1240px;margin:auto;padding:30px 22px 48px}
+h1{font-size:28px;text-align:center;margin:0 0 8px}
+.hint,.foot{color:#637083}
+.hint{text-align:center;max-width:1000px;margin:0 auto 26px;font-size:14px}
+.section-title{text-align:center;font-size:19px;margin:30px 0 14px}
+.grid{display:grid;gap:18px}
+.subscription-grid{grid-template-columns:repeat(2,minmax(0,330px));justify-content:center;gap:20px}
+.node-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+.card{background:white;border:1px solid #dce3ec;border-radius:16px;padding:18px;overflow-wrap:anywhere;box-shadow:0 2px 8px rgba(25,45,75,.035)}
+.card h2{font-size:17px;line-height:1.4;margin:0 0 10px;min-height:48px}
+.card p{font-size:13px;color:#637083;min-height:38px;margin:0 0 10px}
+.card img{display:block;width:min(100%,220px);height:auto;margin:10px auto 16px}
+.card-actions{text-align:center}
+.card a,.card button{display:inline-block;margin:4px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:9px;background:white;color:#164e9a;text-decoration:none;cursor:pointer;font:inherit;font-size:14px}
+.card a:hover,.card button:hover{background:#f3f7fd;border-color:#9db7dc}
+.foot{font-size:12px;text-align:center;margin-top:28px}
+@media(max-width:850px){.node-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:580px){.wrap{padding:22px 14px 36px}.subscription-grid,.node-grid{grid-template-columns:minmax(0,1fr)}.subscription-grid{max-width:380px;margin:auto}.card img{width:min(100%,230px)}}
+</style></head><body><main class="wrap">
+<h1>Suoha 节点二维码</h1>
+<p class="hint">v2rayNG、v2rayN、Shadowrocket、NekoBox、Hiddify：优先扫描对应的 VLESS / Trojan 单节点码。Clash Meta / Mihomo：使用 Clash / Mihomo 订阅码，通过“从 URL 导入”添加。Karing、ClashMi：优先使用订阅码；也可尝试扫描单节点码，具体取决于客户端版本及扫码入口。</p>
+<h2 class="section-title">订阅入口</h2>
+<section class="grid subscription-grid">''' + ''.join(subscription_parts) + '''</section>
+<h2 class="section-title">节点二维码</h2>
+<section class="grid node-grid">''' + ''.join(node_parts) + '''</section>
+<p class="foot">Suoha ''' + html.escape(version) + ''' · 含私密节点凭据，请勿公开转发。</p>
+</main><script>document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='已复制'}catch(e){b.textContent='请长按链接复制'}}));</script></body></html>'''
 (www / 'qr.html').write_text(page, encoding='utf-8')
 PY_QR
   chmod 600 "$WWW/qr.html" "$WWW"/qr/*.svg
