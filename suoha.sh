@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Suoha 2.1 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
+# Suoha 2.2 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
 # Supported: Debian/Ubuntu (systemd), Alpine (OpenRC)
 # Subscription is served only on localhost and exposed through a random secret URL path.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 APP="suoha"
 BASE="/opt/suoha"
 BIN="$BASE/bin"
@@ -52,12 +52,12 @@ install_deps(){
   if [[ "$OS_FAMILY" == debian ]]; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y curl unzip python3 ca-certificates openssl tar gzip procps
+    apt-get install -y curl unzip python3 ca-certificates openssl tar gzip procps qrencode
     INIT="systemd"
     command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemd，无法安装服务"
   else
     apk update
-    apk add --no-cache bash curl unzip python3 ca-certificates openssl coreutils procps
+    apk add --no-cache bash curl unzip python3 ca-certificates openssl coreutils procps qrencode
     INIT="openrc"
     command -v rc-service >/dev/null 2>&1 || die "Alpine 未检测到 OpenRC"
     rc-update add local default >/dev/null 2>&1 || true
@@ -243,7 +243,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not self.path.startswith(prefix):
             self.send_error(404); return
         name = self.path[len(prefix):].split('?',1)[0]
-        if name not in ('sub.txt','clash.yaml'):
+        import re
+        if name not in ('sub.txt', 'clash.yaml', 'qr.html') and not re.fullmatch(r'qr/[A-Za-z0-9._-]+\.svg', name):
             self.send_error(404); return
         self.path = '/' + name
         super().do_GET()
@@ -253,7 +254,65 @@ PY_SUB
   chmod 700 "$BASE/sub_server.py"
 }
 
+# Build a private QR portal. Individual VLESS/Trojan QR codes contain standard
+# share URIs; subscription QR codes contain import URLs for compatible clients.
+ensure_qrencode(){
+  command -v qrencode >/dev/null 2>&1 && return 0
+  info "安装二维码生成工具 qrencode..."
+  if [[ "$OS_FAMILY" == debian ]]; then apt-get update; apt-get install -y qrencode
+  else apk add --no-cache qrencode
+  fi
+  command -v qrencode >/dev/null 2>&1 || die "qrencode 安装失败，无法生成二维码"
+}
+
+write_qr_portal(){
+  local host="$1" subbase="https://$1/s/$SUB_TOKEN"
+  ensure_qrencode
+  python3 - "$DATA/nodes.txt" "$WWW" "$subbase" "$VERSION" <<'PY_QR'
+import html, pathlib, subprocess, sys, urllib.parse
+nodes_file, www_dir, subbase, version = sys.argv[1:]
+www = pathlib.Path(www_dir)
+qrdir = www / 'qr'
+qrdir.mkdir(parents=True, exist_ok=True)
+nodes = [x.strip() for x in pathlib.Path(nodes_file).read_text().splitlines() if x.strip()]
+if not nodes:
+    raise SystemExit('节点列表为空，不能生成二维码')
+def make_qr(name, value):
+    target = qrdir / name
+    subprocess.run(['qrencode', '-t', 'SVG', '-l', 'M', '-m', '2', '-o', str(target), value], check=True)
+    return 'qr/' + name
+
+def card(title, subtitle, image, value, copy_label):
+    return (f'<article class="card"><h2>{html.escape(title)}</h2><p>{html.escape(subtitle)}</p>'
+            f'<img src="{html.escape(image)}" alt="{html.escape(title)} QR code">'
+            f'<a href="{html.escape(value, quote=True)}">打开链接</a>'
+            f'<button type="button" data-copy="{html.escape(value, quote=True)}">复制{html.escape(copy_label)}</button></article>')
+
+parts = []
+standard = subbase + '/sub.txt'
+clash = subbase + '/clash.yaml'
+parts.append(card('通用订阅（VLESS / Trojan）', '支持订阅 URL 导入的客户端', make_qr('subscription-standard.svg', standard), standard, '订阅链接'))
+parts.append(card('Clash / Mihomo 订阅', '适用于 Clash Meta / Mihomo，以及支持 Mihomo 订阅的 Karing、ClashMi', make_qr('subscription-mihomo.svg', clash), clash, '订阅链接'))
+for idx, uri in enumerate(nodes, 1):
+    scheme = urllib.parse.urlsplit(uri).scheme.upper()
+    label = urllib.parse.unquote(urllib.parse.urlsplit(uri).fragment) or f'{scheme} 节点 {idx}'
+    parts.append(card(label, f'{scheme} 单节点分享码；使用客户端的扫码导入功能', make_qr(f'node-{idx:02d}.svg', uri), uri, '节点链接'))
+
+page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Suoha 节点二维码</title><style>*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:#182230;font:16px/1.5 system-ui,sans-serif}.wrap{max-width:1050px;margin:auto;padding:24px 16px 48px}h1{font-size:26px}.hint,.foot{color:#637083}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px}.card{background:white;border:1px solid #dce3ec;border-radius:14px;padding:16px;overflow-wrap:anywhere}.card h2{font-size:17px}.card p{font-size:13px;color:#637083;min-height:38px}.card img{display:block;width:min(100%,230px);height:auto;margin:8px auto 14px}.card a,.card button{display:inline-block;margin:4px;padding:8px 11px;border:1px solid #cbd5e1;border-radius:8px;background:white;color:#164e9a;text-decoration:none;cursor:pointer}.foot{font-size:12px;margin-top:22px}</style></head><body><main class="wrap"><h1>Suoha 节点二维码</h1><p class="hint">v2rayNG、v2rayN、Shadowrocket、NekoBox、Hiddify：优先扫描对应的 VLESS / Trojan 单节点码。Clash Meta / Mihomo：使用 Clash / Mihomo 订阅码，通过“从 URL 导入”添加。Karing、ClashMi：优先使用订阅码；也可尝试扫描单节点码，具体取决于客户端版本及扫码入口。</p><section class="grid">''' + ''.join(parts) + '''</section><p class="foot">Suoha ''' + html.escape(version) + ''' · 含私密节点凭据，请勿公开转发。</p></main><script>document.querySelectorAll('[data-copy]').forEach(b=>b.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent='已复制'}catch(e){b.textContent='请长按链接复制'}}));</script></body></html>'''
+(www / 'qr.html').write_text(page, encoding='utf-8')
+PY_QR
+  chmod 600 "$WWW/qr.html" "$WWW"/qr/*.svg
+  # Avoid duplicate QR portal entries when the menu regenerates the page.
+  if [[ -f "$DATA/links.txt" ]]; then
+    sed -i '/^\[二维码扫码页面\]:$/d;/^https:\/\/.*\/qr\.html$/d' "$DATA/links.txt"
+  fi
+  printf '\n[二维码扫码页面]:\nhttps://%s/s/%s/qr.html\n' "$host" "$SUB_TOKEN" >> "$DATA/links.txt"
+  chmod 600 "$DATA/links.txt"
+  ok "二维码页面已生成：$WWW/qr.html"
+}
+
 write_systemd_unit(){
+
   local unit="$1" desc="$2" execstart="$3"
   cat > "/etc/systemd/system/${unit}.service" <<EOF_UNIT
 [Unit]
@@ -601,7 +660,7 @@ write_fixed_tunnel_config(){
      path: ^/$TROJAN_PATH$
      service: http://127.0.0.1:$TROJAN_PORT
    - hostname: $DOMAIN
-     path: ^/s/$SUB_TOKEN/(sub\.txt|clash\.yaml)$
+     path: ^/s/$SUB_TOKEN/(sub\.txt|clash\.yaml|qr\.html|qr/[A-Za-z0-9._-]+\.svg)$
      service: http://127.0.0.1:$SUB_PORT
    - service: http_status:404
 EOF_CF
@@ -670,6 +729,7 @@ install_fixed(){
   sleep 2
   if [[ "$INIT" == systemd ]]; then systemctl --no-pager --full status suoha-cloudflared.service | tail -n 12 || true; else rc-service suoha-cloudflared status || true; fi
   write_urls
+  write_qr_portal "$DOMAIN"
   ok "固定域名 Tunnel 安装完成"
   cat "$DATA/links.txt"
 }
@@ -724,6 +784,7 @@ https://$d3/s/$SUB_TOKEN/clash.yaml
 ==================================================
 EOF_Q_LINKS
   chmod 600 "$DATA/links.txt"
+  write_qr_portal "$d3"
   ok "Quick Tunnel 已建立：VLESS=$d1 Trojan=$d2 SUB=$d3"
   # Keep the three child processes alive under the service manager.
   while kill -0 "$p1" 2>/dev/null && kill -0 "$p2" 2>/dev/null && kill -0 "$p3" 2>/dev/null; do sleep 5; done
@@ -800,6 +861,30 @@ uninstall_app(){
   ok "Suoha 本机文件和服务已卸载。Cloudflare 授权资料及远端 Tunnel 均已保留。"
 }
 
+regenerate_qr_portal(){
+  load_state
+  write_sub_server
+  local host
+  if [[ "$MODE" == fixed ]]; then
+    host="$DOMAIN"
+    write_fixed_tunnel_config
+  else
+    host="$(python3 - "$DATA/links.txt" <<'PY_HOST'
+import re,sys
+try: data=open(sys.argv[1], encoding='utf-8').read()
+except OSError: raise SystemExit(1)
+m=re.search(r'https://([A-Za-z0-9.-]+\.trycloudflare\.com)/s/', data)
+if not m: raise SystemExit(1)
+print(m.group(1))
+PY_HOST
+)" || die "无法从现有 Quick Tunnel 链接识别订阅域名；请先重启 Quick Tunnel 服务"
+  fi
+  write_qr_portal "$host"
+  service_action restart suoha-sub
+  if [[ "$MODE" == fixed ]]; then service_action restart suoha-cloudflared; fi
+  ok "二维码页面已更新，订阅服务已重启"
+}
+
 manager_menu(){
   while true; do
     echo
@@ -814,6 +899,7 @@ manager_menu(){
     echo "8. 检查 Xray 最新稳定版"
     echo "9. 更新 Xray（自动备份 / 校验 / 失败回滚）"
     echo "10. 回滚到最近一次 Xray 备份"
+    echo "11. 重新生成节点二维码和订阅二维码"
     echo "0. 退出"
     read -r -p "请选择：" c
     case "$c" in
@@ -827,6 +913,7 @@ manager_menu(){
       8) xray_check_update || warn "检查更新失败，请检查网络或 GitHub API 状态" ;;
       9) xray_update || warn "Xray 更新未完成；如已触发自动回滚，请检查服务日志" ;;
       10) xray_rollback || warn "Xray 回滚未完成，请检查服务日志" ;;
+      11) regenerate_qr_portal || warn "二维码生成或服务重载失败，请检查日志" ;;
       0) return ;;
       *) warn "无效选项" ;;
     esac
