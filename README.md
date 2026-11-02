@@ -46,8 +46,9 @@ curl -fL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh -o
 ```bash
 suoha
 ```
+```bash
 curl -fL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh -o /tmp/suoha-update.sh && bash -n /tmp/suoha-update.sh && bash /tmp/suoha-update.sh --upgrade-manager
-
+```
 
 按菜单操作。脚本会在 `/opt/suoha` 保存程序配置、状态、日志和生成的订阅数据。
 
