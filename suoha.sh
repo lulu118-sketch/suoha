@@ -302,11 +302,24 @@ page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta na
 (www / 'qr.html').write_text(page, encoding='utf-8')
 PY_QR
   chmod 600 "$WWW/qr.html" "$WWW"/qr/*.svg
-  # Avoid duplicate QR portal entries when the menu regenerates the page.
+  # Keep the QR portal directly after the Clash / Mihomo subscription link.
+  # Remove any previous QR entry first, then insert it at the intended position.
   if [[ -f "$DATA/links.txt" ]]; then
-    sed -i '/^\[二维码扫码页面\]:$/d;/^https:\/\/.*\/qr\.html$/d' "$DATA/links.txt"
+    local links_tmp qr_url
+    links_tmp="$(mktemp "$DATA/links.XXXXXX")"
+    qr_url="https://$host/s/$SUB_TOKEN/qr.html"
+    awk -v qr_url="$qr_url" '
+      /^\[二维码扫码页面\]:$/ { skip_url=1; next }
+      skip_url && /^https:\/\// { skip_url=0; next }
+      { skip_url=0; print }
+      /^https:\/\/.*\/clash\.yaml$/ {
+        print ""
+        print "[二维码扫码页面]:"
+        print qr_url
+      }
+    ' "$DATA/links.txt" > "$links_tmp"
+    mv "$links_tmp" "$DATA/links.txt"
   fi
-  printf '\n[二维码扫码页面]:\nhttps://%s/s/%s/qr.html\n' "$host" "$SUB_TOKEN" >> "$DATA/links.txt"
   chmod 600 "$DATA/links.txt"
   ok "二维码页面已生成：$WWW/qr.html"
 }
