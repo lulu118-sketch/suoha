@@ -2,20 +2,49 @@
 # Suoha 2.0 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
 # Supported: Debian/Ubuntu (systemd), Alpine (OpenRC)
 # Subscription is served only on localhost and exposed through a random secret URL path.
-# 确保脚本被调用时自动复制到 /opt/suoha/suoha.sh 并创建全局命令 suoha
+# 确保无论以何种方式执行（普通文件、管道、进程替换 bash <(curl ...)），
+# 都会落地 /opt/suoha/suoha.sh 并创建全局命令 suoha。
+# 注意：本段在 set -Eeuo pipefail 之前运行，任何失败都不能中断脚本。
 BASE="/opt/suoha"
 MANAGER="$BASE/suoha.sh"
-if [[ "${BASH_SOURCE[0]:-}" != "$MANAGER" ]] && [[ -f "${BASH_SOURCE[0]:-}" ]]; then
-  install -d -m 0755 "$BASE"
-  install -m 700 "${BASH_SOURCE[0]}" "$MANAGER"
-  ln -sf "$MANAGER" /usr/local/bin/suoha
-  chmod +x /usr/local/bin/suoha
-elif [[ -f "$0" ]] && [[ "$0" != "$MANAGER" ]]; then
-  install -d -m 0755 "$BASE"
-  install -m 700 "$0" "$MANAGER"
-  ln -sf "$MANAGER" /usr/local/bin/suoha
-  chmod +x /usr/local/bin/suoha
-fi
+MANAGER_UPDATE_URL="https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh"
+{
+  _suoha_src="${BASH_SOURCE[0]:-$0}"
+  _suoha_src_real="$(readlink -f "$_suoha_src" 2>/dev/null || true)"
+  _suoha_mgr_real="$(readlink -f "$MANAGER" 2>/dev/null || true)"
+  _suoha_need_install=0
+  if [[ "$_suoha_src_real" == "$_suoha_mgr_real" ]]; then
+    :  # 已经在以安装好的管理脚本（或其软链接）运行，无需复制
+  elif [[ -f "$_suoha_src" ]]; then
+    # 以普通脚本文件运行：直接复制自身
+    _suoha_need_install=1
+  elif [[ ! -f "$MANAGER" ]]; then
+    # 通过 bash <(curl ...) 或管道运行，没有可复制的脚本文件：
+    # 从官方地址重新下载一份完整脚本，校验后再安装。
+    _suoha_tmp="$(mktemp 2>/dev/null)" || _suoha_tmp=""
+    if [[ -n "$_suoha_tmp" ]]; then
+      if ! curl -fsSL --retry 3 --connect-timeout 10 "$MANAGER_UPDATE_URL" -o "$_suoha_tmp" 2>/dev/null; then
+        wget -q -O "$_suoha_tmp" "$MANAGER_UPDATE_URL" 2>/dev/null || true
+      fi
+      if [[ -s "$_suoha_tmp" ]] && grep -qx 'APP="suoha"' "$_suoha_tmp" 2>/dev/null && bash -n "$_suoha_tmp" 2>/dev/null; then
+        _suoha_need_install=1
+        _suoha_src="$_suoha_tmp"
+      fi
+    fi
+  fi
+  if [[ "$_suoha_need_install" == 1 ]]; then
+    install -d -m 0755 "$BASE" 2>/dev/null
+    install -m 700 "$_suoha_src" "$MANAGER" 2>/dev/null
+  fi
+  [[ -n "${_suoha_tmp:-}" ]] && rm -f "$_suoha_tmp" 2>/dev/null
+  # 无论来源如何，只要管理脚本存在，就（重新）创建全局命令入口
+  if [[ -f "$MANAGER" ]]; then
+    install -d -m 0755 /usr/local/bin 2>/dev/null
+    ln -sf "$MANAGER" /usr/local/bin/suoha 2>/dev/null
+    ln -sf "$MANAGER" /usr/bin/suoha 2>/dev/null
+  fi
+} 2>/dev/null
+unset _suoha_src _suoha_src_real _suoha_mgr_real _suoha_need_install _suoha_tmp 2>/dev/null || true
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -123,14 +152,19 @@ arch_assets(){
 
 prepare_dirs(){
   install -d -m 0755 "$BASE" "$BIN" "$CONF" "$DATA" "$LOG" "$WWW"
+  install -d -m 0700 "$CF_HOME" 2>/dev/null || true
   chmod 700 "$BASE" "$CONF" "$DATA" "$LOG"
-  if [[ -f "$0" ]]; then
-    install -m 700 "$0" "$MANAGER"
+  local self="${BASH_SOURCE[0]:-$0}" self_real manager_real
+  self_real="$(readlink -f "$self" 2>/dev/null || true)"
+  manager_real="$(readlink -f "$MANAGER" 2>/dev/null || true)"
+  if [[ -n "$self_real" && "$self_real" != "$manager_real" && -f "$self" ]]; then
+    install -m 700 "$self" "$MANAGER"
   elif [[ -f "$MANAGER" ]]; then
     chmod 700 "$MANAGER"
   fi
   # 每次准备目录或安装时，强制刷新全局软链接
   if [[ -f "$MANAGER" ]]; then
+    install -d -m 0755 /usr/local/bin 2>/dev/null || true
     ln -sf "$MANAGER" /usr/local/bin/suoha
     ln -sf "$MANAGER" /usr/bin/suoha
   fi
@@ -906,8 +940,11 @@ install_quick(){
   [[ "$EDGE_IP_VERSION" == 4 || "$EDGE_IP_VERSION" == 6 ]] || die "只能输入 4 或 6"
   UUID="$(cat /proc/sys/kernel/random/uuid)"
   VLESS_PATH="vl-$(random_hex 8)"; TROJAN_PATH="tr-$(random_hex 8)"; SUB_TOKEN="$(random_hex 24)"
-  VLESS_PORT="$(new_port)"; TROJAN_PORT="$(new_port)"; SUB_PORT="$(new_port)"
-  while [[ "$TROJAN_PORT" == "$VLESS_PORT" || "$SUB_PORT" == "$VLESS_PORT" || "$SUB_PORT" == "$TROJAN_PORT" ]]; do SUB_PORT="$(new_port)"; done
+  VLESS_PORT="$(new_port)"
+  TROJAN_PORT="$(new_port)"
+  while [[ "$TROJAN_PORT" == "$VLESS_PORT" ]]; do TROJAN_PORT="$(new_port)"; done
+  SUB_PORT="$(new_port)"
+  while [[ "$SUB_PORT" == "$VLESS_PORT" || "$SUB_PORT" == "$TROJAN_PORT" ]]; do SUB_PORT="$(new_port)"; done
   make_xray_config
   install -d -m 0700 "$WWW"
   write_sub_server
@@ -1177,9 +1214,11 @@ if [[ "${1:-}" == "--upgrade-manager" ]]; then
   os_detect
   [[ -s "$STATE" ]] || die "未发现现有 Suoha 安装状态：$STATE"
   INIT="$( [[ "$OS_FAMILY" == debian ]] && echo systemd || echo openrc )"
-  if [[ "$(readlink -f "$0" 2>/dev/null || true)" != "$(readlink -f "$MANAGER" 2>/dev/null || true)" ]]; then
+  if [[ -f "$0" && "$(readlink -f "$0" 2>/dev/null || true)" != "$(readlink -f "$MANAGER" 2>/dev/null || true)" ]]; then
     install -d -m 0755 "$BASE"
     install -m 0700 "$0" "$MANAGER"
+  elif [[ -f "$MANAGER" ]]; then
+    chmod 0700 "$MANAGER"
   fi
   ln -sf "$MANAGER" /usr/local/bin/suoha
   ln -sf "$MANAGER" /usr/bin/suoha
