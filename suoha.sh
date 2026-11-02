@@ -6,7 +6,7 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-VERSION="2.2.0"
+VERSION="2.2.1"
 APP="suoha"
 BASE="/opt/suoha"
 BIN="$BASE/bin"
@@ -19,6 +19,7 @@ STATE="$BASE/state.env"
 MANAGER="$BASE/suoha.sh"
 XRAY_BACKUP_DIR="$BASE/backup/xray"
 XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+DEPS_MARKER="/var/lib/suoha/.dependencies_checked"
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; RESET='\033[0m'
 info(){ echo -e "${BLUE}[INFO]${RESET} $*"; }
@@ -47,22 +48,49 @@ os_detect(){
   esac
 }
 
+deps_missing(){
+  local cmd
+  for cmd in curl unzip python3 openssl tar gzip ps qrencode update-ca-certificates; do
+    command -v "$cmd" >/dev/null 2>&1 || return 0
+  done
+  return 1
+}
+
 install_deps(){
-  info "安装运行依赖..."
-  if [[ "$OS_FAMILY" == debian ]]; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y curl unzip python3 ca-certificates openssl tar gzip procps qrencode
-    INIT="systemd"
-    command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemd，无法安装服务"
+  local marker_ok=0
+  [[ -s "$DEPS_MARKER" ]] && [[ "$(<"$DEPS_MARKER")" == "$OS_FAMILY" ]] && marker_ok=1
+
+  if (( marker_ok )) && ! deps_missing; then
+    info "运行依赖检查通过，跳过包管理器更新与安装"
   else
-    apk update
-    apk add --no-cache bash curl unzip python3 ca-certificates openssl coreutils procps qrencode
+    info "首次运行或检测到依赖缺失，正在补齐运行依赖..."
+    if [[ "$OS_FAMILY" == debian ]]; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y curl unzip python3 ca-certificates openssl tar gzip procps qrencode
+      INIT="systemd"
+      command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemd，无法安装服务"
+    else
+      apk update
+      apk add --no-cache bash curl unzip python3 ca-certificates openssl coreutils procps qrencode
+      INIT="openrc"
+      command -v rc-service >/dev/null 2>&1 || die "Alpine 未检测到 OpenRC"
+      rc-update add local default >/dev/null 2>&1 || true
+    fi
+    update-ca-certificates >/dev/null 2>&1 || true
+    deps_missing && die "运行依赖安装后仍有命令缺失，请检查系统软件源"
+    install -d -m 0755 "$(dirname "$DEPS_MARKER")"
+    printf '%s\\n' "$OS_FAMILY" > "$DEPS_MARKER"
+    chmod 600 "$DEPS_MARKER"
+  fi
+
+  if [[ "$OS_FAMILY" == debian ]]; then
+    INIT="systemd"
+    command -v systemctl >/dev/null 2>&1 || die "当前系统没有 systemd，无法管理服务"
+  else
     INIT="openrc"
     command -v rc-service >/dev/null 2>&1 || die "Alpine 未检测到 OpenRC"
-    rc-update add local default >/dev/null 2>&1 || true
   fi
-  update-ca-certificates >/dev/null 2>&1 || true
 }
 
 arch_assets(){
@@ -259,7 +287,7 @@ PY_SUB
 ensure_qrencode(){
   command -v qrencode >/dev/null 2>&1 && return 0
   info "安装二维码生成工具 qrencode..."
-  if [[ "$OS_FAMILY" == debian ]]; then apt-get update; apt-get install -y qrencode
+  if [[ "$OS_FAMILY" == debian ]]; then apt-get install -y qrencode
   else apk add --no-cache qrencode
   fi
   command -v qrencode >/dev/null 2>&1 || die "qrencode 安装失败，无法生成二维码"
@@ -927,6 +955,8 @@ uninstall_app(){
   fi
   rm -f /usr/local/bin/suoha /usr/bin/suoha
   rm -rf "$BASE"
+  rm -f "$DEPS_MARKER"
+  rmdir "$(dirname "$DEPS_MARKER")" >/dev/null 2>&1 || true
   ok "Suoha 本机文件和服务已卸载。Cloudflare 授权资料及远端 Tunnel 均已保留。"
 }
 
