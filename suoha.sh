@@ -112,6 +112,11 @@ prepare_dirs(){
   chmod 700 "$BASE" "$CONF" "$DATA" "$LOG"
   if [[ -f "$0" ]]; then
     install -m 700 "$0" "$MANAGER"
+  elif [[ -f "$MANAGER" ]]; then
+    chmod 700 "$MANAGER"
+  fi
+  # 每次准备目录或安装时，强制刷新全局软链接
+  if [[ -f "$MANAGER" ]]; then
     ln -sf "$MANAGER" /usr/local/bin/suoha
     ln -sf "$MANAGER" /usr/bin/suoha
   fi
