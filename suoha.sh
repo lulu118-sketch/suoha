@@ -20,7 +20,7 @@ MANAGER="$BASE/suoha.sh"
 XRAY_BACKUP_DIR="$BASE/backup/xray"
 XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 DEPS_MARKER="/var/lib/suoha/.dependencies_checked"
-MANAGER_UPDATE_URL="https://raw.githubusercontent.com/lulu118-sketch/suoha/blob/main/suoha.sh"
+MANAGER_UPDATE_URL="https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh"
 MANAGER_UPDATE_CONFIG="$CONF/manager-update.conf"
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; RESET='\033[0m'
