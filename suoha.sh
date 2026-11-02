@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Suoha 2.2 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
+# Suoha 2.0 - Xray (VLESS + Trojan over WebSocket) + Cloudflare Tunnel
 # Supported: Debian/Ubuntu (systemd), Alpine (OpenRC)
 # Subscription is served only on localhost and exposed through a random secret URL path.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-VERSION="2.2.1"
+VERSION="2.0.0"
 APP="suoha"
 BASE="/opt/suoha"
 BIN="$BASE/bin"
@@ -20,6 +20,8 @@ MANAGER="$BASE/suoha.sh"
 XRAY_BACKUP_DIR="$BASE/backup/xray"
 XRAY_RELEASE_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 DEPS_MARKER="/var/lib/suoha/.dependencies_checked"
+MANAGER_UPDATE_URL="https://raw.githubusercontent.com/OWNER/REPO/main/suoha.sh"
+MANAGER_UPDATE_CONFIG="$CONF/manager-update.conf"
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; BLUE='\033[34m'; RESET='\033[0m'
 info(){ echo -e "${BLUE}[INFO]${RESET} $*"; }
@@ -984,6 +986,120 @@ PY_HOST
   ok "二维码页面已更新，订阅服务已重启"
 }
 
+# Manager self-updater. It only replaces /opt/suoha/suoha.sh; it never
+# touches Xray, cloudflared, Tunnel credentials, state, nodes, or subscriptions.
+manager_auto_update_enabled(){
+  [[ ! -f "$MANAGER_UPDATE_CONFIG" ]] && return 0
+  ! grep -qx 'AUTO_UPDATE=0' "$MANAGER_UPDATE_CONFIG"
+}
+
+manager_update_status(){
+  if manager_auto_update_enabled; then
+    echo "开启"
+  else
+    echo "关闭"
+  fi
+}
+
+toggle_manager_auto_update(){
+  install -d -m 0700 "$CONF"
+  if manager_auto_update_enabled; then
+    printf '%s\n' 'AUTO_UPDATE=0' > "$MANAGER_UPDATE_CONFIG"
+    chmod 600 "$MANAGER_UPDATE_CONFIG"
+    ok "管理脚本自动更新已关闭"
+  else
+    printf '%s\n' 'AUTO_UPDATE=1' > "$MANAGER_UPDATE_CONFIG"
+    chmod 600 "$MANAGER_UPDATE_CONFIG"
+    ok "管理脚本自动更新已开启"
+  fi
+}
+
+manager_auto_update(){
+  local tmp remote_version local_version stage backup
+  [[ "${SUOHA_AUTO_UPDATE_REEXEC:-0}" == 1 ]] && return 0
+  [[ -s "$STATE" && -f "$MANAGER" ]] || return 0
+  manager_auto_update_enabled || { info "管理脚本自动更新已关闭，跳过版本检查"; return 0; }
+  command -v curl >/dev/null 2>&1 || { warn "缺少 curl，跳过管理脚本自动更新"; return 0; }
+
+  tmp="$(mktemp -d 2>/dev/null)" || { warn "无法创建更新临时目录，继续使用当前版本"; return 0; }
+  if ! curl -fsSL --connect-timeout 5 --max-time 20 --retry 1 \
+      "$MANAGER_UPDATE_URL" -o "$tmp/suoha.sh"; then
+    warn "无法连接 GitHub，继续使用本地 Suoha $VERSION"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  remote_version="$(sed -nE 's/^VERSION="([^"]+)".*/\1/p' "$tmp/suoha.sh" | head -n1)"
+  local_version="$VERSION"
+  if [[ ! "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    warn "远端脚本版本号无效，拒绝更新；继续使用本地版本"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  # Validate the downloaded file before comparing or installing it.
+  if ! grep -qx 'APP="suoha"' "$tmp/suoha.sh" || ! bash -n "$tmp/suoha.sh"; then
+    warn "远端脚本身份或 Bash 语法检查失败，拒绝更新；继续使用本地版本"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  if ! python3 - "$local_version" "$remote_version" <<'PY_VERSION'
+import sys
+def parts(v):
+    return tuple(int(x) for x in v.split('.'))
+raise SystemExit(0 if parts(sys.argv[2]) > parts(sys.argv[1]) else 1)
+PY_VERSION
+  then
+    if [[ "$remote_version" == "$local_version" ]]; then
+      info "Suoha 管理脚本已是最新版本：$VERSION"
+    else
+      info "GitHub 远端版本 $remote_version 不高于本地版本 $local_version，跳过更新"
+    fi
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  info "发现 Suoha 管理脚本更新：$local_version -> $remote_version"
+  stage="$MANAGER.new.$$"
+  backup="$MANAGER.bak"
+  if ! install -m 0700 "$tmp/suoha.sh" "$stage"; then
+    warn "写入新版脚本失败，继续使用本地版本"
+    rm -f "$stage"
+    rm -rf "$tmp"
+    return 0
+  fi
+  if ! bash -n "$stage"; then
+    warn "新版脚本二次语法检查失败，拒绝替换"
+    rm -f "$stage"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  # Keep one backup, then atomically replace the manager file.
+  if [[ -f "$MANAGER" ]]; then
+    cp -p "$MANAGER" "$backup" || {
+      warn "无法备份当前管理脚本，取消更新"
+      rm -f "$stage"
+      rm -rf "$tmp"
+      return 0
+    }
+  fi
+  if ! mv -f "$stage" "$MANAGER"; then
+    warn "替换管理脚本失败，继续使用本地版本"
+    rm -f "$stage"
+    rm -rf "$tmp"
+    return 0
+  fi
+  chmod 0700 "$MANAGER"
+  ln -sf "$MANAGER" /usr/local/bin/suoha
+  rm -rf "$tmp"
+  ok "Suoha 管理脚本已安全更新至 $remote_version"
+  info "现有 Xray、cloudflared、Tunnel、节点、订阅和 CF 授权资料均未修改"
+  export SUOHA_AUTO_UPDATE_REEXEC=1
+  exec "$MANAGER"
+}
+
 manager_menu(){
   while true; do
     echo
@@ -999,6 +1115,7 @@ manager_menu(){
     echo "9. 更新 Xray（自动备份 / 校验 / 失败回滚）"
     echo "10. 回滚到最近一次 Xray 备份"
     echo "11. 重新生成节点二维码和订阅二维码"
+    echo "12. 管理脚本自动更新（当前：$(manager_update_status)）"
     echo "0. 退出"
     read -r -p "请选择：" c
     case "$c" in
@@ -1013,6 +1130,7 @@ manager_menu(){
       9) xray_update || warn "Xray 更新未完成；如已触发自动回滚，请检查服务日志" ;;
       10) xray_rollback || warn "Xray 回滚未完成，请检查服务日志" ;;
       11) regenerate_qr_portal || warn "二维码生成或服务重载失败，请检查日志" ;;
+      12) toggle_manager_auto_update ;;
       0) return ;;
       *) warn "无效选项" ;;
     esac
@@ -1071,6 +1189,7 @@ require_root
 os_detect
 install_deps
 INIT="${INIT:-$( [[ "$OS_FAMILY" == debian ]] && echo systemd || echo openrc )}"
+manager_auto_update
 if [[ -x "$MANAGER" && -f "$STATE" ]]; then
   # The manager is the same script; keep environment and paths consistent.
   :
