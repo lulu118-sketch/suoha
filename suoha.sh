@@ -113,6 +113,7 @@ prepare_dirs(){
   if [[ -f "$0" ]]; then
     install -m 700 "$0" "$MANAGER"
     ln -sf "$MANAGER" /usr/local/bin/suoha
+    ln -sf "$MANAGER" /usr/bin/suoha
   fi
 }
 
@@ -261,7 +262,6 @@ EOF_RULES
   chmod 600 "$DATA/nodes.txt" "$DATA/sub.txt" "$DATA/clash.yaml"
 }
 
-# Subscription server: bind loopback only. A random token is part of the URL path.
 write_sub_server(){
   cat > "$BASE/sub_server.py" <<'PY_SUB'
 #!/usr/bin/env python3
@@ -285,8 +285,6 @@ PY_SUB
   chmod 700 "$BASE/sub_server.py"
 }
 
-# Build a private QR portal. Individual VLESS/Trojan QR codes contain standard
-# share URIs; subscription QR codes contain import URLs for compatible clients.
 ensure_qrencode(){
   command -v qrencode >/dev/null 2>&1 && return 0
   info "安装二维码生成工具 qrencode..."
@@ -363,9 +361,6 @@ h1{font-size:28px;text-align:center;margin:0 0 8px}
 (www / 'qr.html').write_text(page, encoding='utf-8')
 PY_QR
   chmod 600 "$WWW/qr.html" "$WWW"/qr/*.svg
-  # Keep the QR portal directly after the Clash/Mihomo subscription,
-  # before service parameters or Quick Tunnel notes. Rebuild in place so
-  # repeated QR regeneration never creates duplicate entries.
   if [[ -f "$DATA/links.txt" ]]; then
     python3 - "$DATA/links.txt" "$host" "$SUB_TOKEN" <<'PY_LINKS'
 import pathlib, re, sys
@@ -373,7 +368,6 @@ path = pathlib.Path(sys.argv[1])
 host, token = sys.argv[2], sys.argv[3]
 lines = path.read_text(encoding='utf-8').splitlines()
 
-# Remove any previous QR portal entry, regardless of its old position.
 clean = []
 skip_url = False
 for line in lines:
@@ -389,7 +383,6 @@ for line in lines:
         continue
     clean.append(line)
 
-# Insert immediately after the Clash/Mihomo subscription URL.
 try:
     heading = next(i for i, line in enumerate(clean)
                    if line.strip() == '[Clash / Mihomo 订阅链接]:')
@@ -412,7 +405,6 @@ PY_LINKS
 }
 
 write_systemd_unit(){
-
   local unit="$1" desc="$2" execstart="$3"
   cat > "/etc/systemd/system/${unit}.service" <<EOF_UNIT
 [Unit]
@@ -501,8 +493,6 @@ start_xray(){
   service_enable_start "suoha-xray"
 }
 
-# Xray updater: only replaces /opt/suoha/bin/xray. Existing config, UUID,
-# ports, paths, subscriptions and Cloudflare Tunnel are deliberately untouched.
 xray_current_version(){
   [[ -x "$BIN/xray" ]] || { echo "未安装"; return 1; }
   "$BIN/xray" version 2>/dev/null | head -n1 | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/v\1/'
@@ -764,7 +754,6 @@ write_fixed_tunnel_config(){
      service: http://127.0.0.1:$SUB_PORT
    - service: http_status:404
 EOF_CF
-  # Remove leading whitespace from top-level YAML keys.
   sed -i 's/^ //' "$CONF/cloudflared.yml"
   "$BIN/cloudflared" tunnel --config "$CONF/cloudflared.yml" ingress validate
 }
@@ -886,7 +875,6 @@ EOF_Q_LINKS
   chmod 600 "$DATA/links.txt"
   write_qr_portal "$d3"
   ok "Quick Tunnel 已建立：VLESS=$d1 Trojan=$d2 SUB=$d3"
-  # Keep the three child processes alive under the service manager.
   while kill -0 "$p1" 2>/dev/null && kill -0 "$p2" 2>/dev/null && kill -0 "$p3" 2>/dev/null; do sleep 5; done
   err "至少一个 Quick Tunnel 进程退出，交由服务管理器重启"
   return 1
@@ -987,8 +975,6 @@ PY_HOST
   ok "二维码页面已更新，订阅服务已重启"
 }
 
-# Manager self-updater. It only replaces /opt/suoha/suoha.sh; it never
-# touches Xray, cloudflared, Tunnel credentials, state, nodes, or subscriptions.
 manager_auto_update_enabled(){
   [[ ! -f "$MANAGER_UPDATE_CONFIG" ]] && return 0
   ! grep -qx 'AUTO_UPDATE=0' "$MANAGER_UPDATE_CONFIG"
@@ -1038,7 +1024,6 @@ manager_auto_update(){
     return 0
   fi
 
-  # Validate the downloaded file before comparing or installing it.
   if ! grep -qx 'APP="suoha"' "$tmp/suoha.sh" || ! bash -n "$tmp/suoha.sh"; then
     warn "远端脚本身份或 Bash 语法检查失败，拒绝更新；继续使用本地版本"
     rm -rf "$tmp"
@@ -1077,7 +1062,6 @@ PY_VERSION
     return 0
   fi
 
-  # Keep one backup, then atomically replace the manager file.
   if [[ -f "$MANAGER" ]]; then
     cp -p "$MANAGER" "$backup" || {
       warn "无法备份当前管理脚本，取消更新"
@@ -1094,6 +1078,7 @@ PY_VERSION
   fi
   chmod 0700 "$MANAGER"
   ln -sf "$MANAGER" /usr/local/bin/suoha
+  ln -sf "$MANAGER" /usr/bin/suoha
   rm -rf "$tmp"
   ok "Suoha 管理脚本已安全更新至 $remote_version"
   info "现有 Xray、cloudflared、Tunnel、节点、订阅和 CF 授权资料均未修改"
@@ -1168,8 +1153,6 @@ if [[ "${1:-}" == "--quick-daemon" ]]; then
   exit $?
 fi
 
-# Safely deploy this script as the manager of an existing Suoha installation.
-# Only the manager script and command symlink are changed; state/config/data/services remain intact.
 if [[ "${1:-}" == "--upgrade-manager" ]]; then
   require_root
   os_detect
@@ -1180,6 +1163,7 @@ if [[ "${1:-}" == "--upgrade-manager" ]]; then
     install -m 0700 "$0" "$MANAGER"
   fi
   ln -sf "$MANAGER" /usr/local/bin/suoha
+  ln -sf "$MANAGER" /usr/bin/suoha
   load_state
   ok "Suoha 管理脚本已升级至 $VERSION；现有配置、节点、订阅及 Tunnel 均未修改"
   manager_menu
@@ -1192,7 +1176,6 @@ install_deps
 INIT="${INIT:-$( [[ "$OS_FAMILY" == debian ]] && echo systemd || echo openrc )}"
 manager_auto_update
 if [[ -x "$MANAGER" && -f "$STATE" ]]; then
-  # The manager is the same script; keep environment and paths consistent.
   :
 fi
 main_menu
