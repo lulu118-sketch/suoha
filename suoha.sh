@@ -302,23 +302,49 @@ page = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta na
 (www / 'qr.html').write_text(page, encoding='utf-8')
 PY_QR
   chmod 600 "$WWW/qr.html" "$WWW"/qr/*.svg
-  # Keep the QR portal directly after the Clash / Mihomo subscription link.
-  # Remove any previous QR entry first, then insert it at the intended position.
+  # Keep the QR portal directly after the Clash/Mihomo subscription,
+  # before service parameters or Quick Tunnel notes. Rebuild in place so
+  # repeated QR regeneration never creates duplicate entries.
   if [[ -f "$DATA/links.txt" ]]; then
-    local links_tmp qr_url
-    links_tmp="$(mktemp "$DATA/links.XXXXXX")"
-    qr_url="https://$host/s/$SUB_TOKEN/qr.html"
-    awk -v qr_url="$qr_url" '
-      /^\[二维码扫码页面\]:$/ { skip_url=1; next }
-      skip_url && /^https:\/\// { skip_url=0; next }
-      { skip_url=0; print }
-      /^https:\/\/.*\/clash\.yaml$/ {
-        print ""
-        print "[二维码扫码页面]:"
-        print qr_url
-      }
-    ' "$DATA/links.txt" > "$links_tmp"
-    mv "$links_tmp" "$DATA/links.txt"
+    python3 - "$DATA/links.txt" "$host" "$SUB_TOKEN" <<'PY_LINKS'
+import pathlib, re, sys
+path = pathlib.Path(sys.argv[1])
+host, token = sys.argv[2], sys.argv[3]
+lines = path.read_text(encoding='utf-8').splitlines()
+
+# Remove any previous QR portal entry, regardless of its old position.
+clean = []
+skip_url = False
+for line in lines:
+    if line.strip() == '[二维码扫码页面]:':
+        skip_url = True
+        continue
+    if skip_url:
+        if line.strip().startswith('https://') and '/qr.html' in line:
+            skip_url = False
+            continue
+        skip_url = False
+    if re.fullmatch(r'https://[^/]+/s/[^/]+/qr\.html', line.strip()):
+        continue
+    clean.append(line)
+
+# Insert immediately after the Clash/Mihomo subscription URL.
+try:
+    heading = next(i for i, line in enumerate(clean)
+                   if line.strip() == '[Clash / Mihomo 订阅链接]:')
+except StopIteration:
+    raise SystemExit('找不到 Clash / Mihomo 订阅链接标题，未修改链接文件')
+
+url_index = next((i for i in range(heading + 1, len(clean))
+                  if clean[i].strip().startswith('https://')), None)
+if url_index is None:
+    raise SystemExit('找不到 Clash / Mihomo 订阅 URL，未修改链接文件')
+
+qr_block = ['', '[二维码扫码页面]:',
+            f'https://{host}/s/{token}/qr.html']
+clean[url_index + 1:url_index + 1] = qr_block
+path.write_text('\n'.join(clean).rstrip() + '\n', encoding='utf-8')
+PY_LINKS
   fi
   chmod 600 "$DATA/links.txt"
   ok "二维码页面已生成：$WWW/qr.html"
