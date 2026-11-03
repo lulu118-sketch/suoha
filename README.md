@@ -22,7 +22,10 @@
 - 运行时会下载 Xray 和 cloudflared 的最新发行版。
 
 ## 安装
-
+升级系统
+```bash
+apt update &&  apt full-upgrade -y && apt install -y curl socat wget  && apt install -y sqlite3 socat cron
+```
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh)
