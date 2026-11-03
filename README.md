@@ -27,6 +27,7 @@
 apt update &&  apt full-upgrade -y && apt install -y curl socat wget  && apt install -y sqlite3 socat cron
 ```
 
+安装suoha
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/lulu118-sketch/suoha/main/suoha.sh)
 ```
