@@ -258,8 +258,8 @@ log-level: warning
 ipv6: false
 proxies:
 EOF_CLASH
-  domains=("$vless_server" "cf.090227.xyz" "cloudflare.182682.xyz")
-  labels=("默认入口" "优选cf.090227" "优选182682")
+  domains=("$vless_server" "cf.090227.xyz" "cloudflare.182682.xyz" "www.teamviewer.com" "www.polestar.com" "www.garmin.com")
+  labels=("默认入口" "优选cf.090227" "优选182682" "TeamViewer优选" "Polestar优选" "Garmin优选")
   names=()
   for i in "${!domains[@]}"; do
     d="${domains[$i]}"; l="${labels[$i]}"; nm="${tag}-VLESS-${l}"
@@ -280,8 +280,8 @@ EOF_CLASH
         Host: "$vless_sni"
 EOF_VLESS
   done
-  domains=("$trojan_server" "cf.090227.xyz" "cloudflare.182682.xyz")
-  labels=("默认入口" "优选cf.090227" "优选182682")
+  domains=("$trojan_server" "cf.090227.xyz" "cloudflare.182682.xyz" "www.teamviewer.com" "www.polestar.com" "www.garmin.com")
+  labels=("默认入口" "优选cf.090227" "优选182682" "TeamViewer优选" "Polestar优选" "Garmin优选")
   for i in "${!domains[@]}"; do
     d="${domains[$i]}"; l="${labels[$i]}"; nm="${tag}-Trojan-${l}"
     printf 'trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=%%2F%s#%s\n' "$UUID" "$d" "$trojan_sni" "$trojan_sni" "$TROJAN_PATH" "$nm" >> "$DATA/nodes.txt"
